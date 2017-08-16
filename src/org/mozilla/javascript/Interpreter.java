@@ -365,6 +365,7 @@ public final class Interpreter extends Icode implements Evaluator
               case Token.YIELD :
               case Icode_GENERATOR :
               case Icode_GENERATOR_END :
+              case Icode_GENERATOR_RETURN :
               {
                 int line = getIndex(iCode, pc);
                 out.println(tname + " : " + line);
@@ -495,6 +496,7 @@ public final class Interpreter extends Icode implements Evaluator
             case Token.YIELD:
             case Icode_GENERATOR:
             case Icode_GENERATOR_END:
+            case Icode_GENERATOR_RETURN:
                 // source line
                 return 1 + 2;
 
@@ -979,9 +981,12 @@ switch (op) {
           frame.pc--; // we want to come back here when we resume
           CallFrame generatorFrame = captureFrameForGenerator(frame);
           generatorFrame.frozen = true;
-          NativeGenerator generator = new NativeGenerator(frame.scope,
-              generatorFrame.fnOrScript, generatorFrame);
-          frame.result = generator;
+          if (cx.getLanguageVersion() >= Context.VERSION_ES6) {
+            frame.result = new ES6Generator(frame.scope, generatorFrame.fnOrScript, generatorFrame);
+          } else {
+              frame.result = new NativeGenerator(frame.scope,
+                generatorFrame.fnOrScript, generatorFrame);
+          }
           break Loop;
         } else {
           // We are now resuming execution. Fall through to YIELD case.
@@ -1008,6 +1013,21 @@ switch (op) {
           NativeIterator.getStopIterationObject(frame.scope),
           frame.idata.itsSourceFile, sourceLine);
       break Loop;
+    }
+    case Icode_GENERATOR_RETURN: {
+        // throw StopIteration with the value of "return"
+        frame.frozen = true;
+        frame.result = stack[stackTop];
+        frame.resultDbl = sDbl[stackTop];
+        --stackTop;
+
+        NativeIterator.StopIteration si = new NativeIterator.StopIteration(
+           (frame.result == DOUBLE_MARK) ? frame.resultDbl : frame.result);
+
+        int sourceLine = getIndex(iCode, frame.pc);
+        generatorState.returnedException =
+            new JavaScriptException(si, frame.idata.itsSourceFile, sourceLine);
+        break Loop;
     }
     case Token.THROW: {
         Object value = stack[stackTop];

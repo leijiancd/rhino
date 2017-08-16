@@ -14,8 +14,13 @@ import org.mozilla.javascript.ast.Name;
 import org.mozilla.javascript.ast.ScriptNode;
 import org.mozilla.classfile.*;
 
-import java.util.*;
 import java.lang.reflect.Constructor;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.ListIterator;
+import java.util.Map;
 
 import static org.mozilla.classfile.ClassFileWriter.ACC_FINAL;
 import static org.mozilla.classfile.ClassFileWriter.ACC_PRIVATE;
@@ -1434,6 +1439,7 @@ class BodyCodegen
         epilogueLabel = -1;
         enterAreaStartLabel = -1;
         generatorStateLocal = -1;
+        generatorReturnLocal = -1;
     }
 
     /**
@@ -1500,10 +1506,13 @@ class BodyCodegen
             // the saved thisObj from the GeneratorState object.
             cfw.addALoad(thisObjLocal);
             generatorStateLocal = firstFreeLocal++;
+            generatorReturnLocal = firstFreeLocal++;
             localsMax = firstFreeLocal;
             cfw.add(ByteCode.CHECKCAST, OptRuntime.GeneratorState.CLASS_NAME);
             cfw.add(ByteCode.DUP);
             cfw.addAStore(generatorStateLocal);
+            Codegen.pushUndefined(cfw);
+            cfw.addAStore(generatorReturnLocal);
             cfw.add(ByteCode.GETFIELD,
                     OptRuntime.GeneratorState.CLASS_NAME,
                     OptRuntime.GeneratorState.thisObj_NAME,
@@ -1785,10 +1794,7 @@ class BodyCodegen
             cfw.markLabel(epilogueLabel);
         }
 
-        if (hasVarsInRegs) {
-            cfw.add(ByteCode.ARETURN);
-            return;
-        } else if (isGenerator) {
+        if (isGenerator) {
             if (((FunctionNode)scriptOrFn).getResumptionPoints() != null) {
                 cfw.markTableSwitchDefault(generatorSwitch);
             }
@@ -1796,14 +1802,18 @@ class BodyCodegen
             // change state for re-entry
             generateSetGeneratorResumptionPoint(GENERATOR_TERMINATE);
 
-            // throw StopIteration
+            // throw StopIteration. "value" is in the generatorReturn slot
             cfw.addALoad(variableObjectLocal);
+            cfw.addALoad(generatorReturnLocal);
+
             addOptRuntimeInvoke("throwStopIteration",
-                    "(Ljava/lang/Object;)V");
+                    "(Ljava/lang/Object;Ljava/lang/Object;)V");
 
             Codegen.pushUndefined(cfw);
             cfw.add(ByteCode.ARETURN);
 
+        } else if (hasVarsInRegs) {
+            cfw.add(ByteCode.ARETURN);
         } else if (fnCurrent == null) {
             cfw.addALoad(popvLocal);
             cfw.add(ByteCode.ARETURN);
@@ -1959,16 +1969,23 @@ class BodyCodegen
 
               case Token.RETURN_RESULT:
               case Token.RETURN:
-                if (!isGenerator) {
-                    if (child != null) {
-                        generateExpression(child, node);
-                    } else if (type == Token.RETURN) {
-                        Codegen.pushUndefined(cfw);
-                    } else {
-                        if (popvLocal < 0) throw Codegen.badTree();
-                        cfw.addALoad(popvLocal);
+                if (child != null) {
+                    generateExpression(child, node);
+                    if (isGenerator) {
+                        // Need to stash the return value because other stuff might happen
+                        // or it may never have been encountered.
+                        cfw.addAStore(generatorReturnLocal);
                     }
+                } else if (type == Token.RETURN) {
+                    if (!isGenerator) {
+                        // If a generator, then we already saved the "undefined" value as the return.
+                        Codegen.pushUndefined(cfw);
+                    }
+                } else {
+                    if (popvLocal < 0) throw Codegen.badTree();
+                    cfw.addALoad(popvLocal);
                 }
+
                 if (compilerEnv.isGenerateObserverCount())
                     addInstructionCount();
                 if (epilogueLabel == -1) {
@@ -2096,7 +2113,7 @@ class BodyCodegen
 
                     if (compilerEnv.isGenerateObserverCount())
                         saveCurrentCodeOffset();
-                    // there is exactly one value on the stack when enterring
+                    // there is exactly one value on the stack when entering
                     // finally blocks: the return address (or its int encoding)
                     cfw.setStackTop((short)1);
 
@@ -2106,6 +2123,7 @@ class BodyCodegen
                     int finallyStart = cfw.acquireLabel();
                     int finallyEnd = cfw.acquireLabel();
                     cfw.markLabel(finallyStart);
+
 
                     generateIntegerWrap();
                     cfw.addAStore(finallyRegister);
@@ -2118,6 +2136,7 @@ class BodyCodegen
                     cfw.addALoad(finallyRegister);
                     cfw.add(ByteCode.CHECKCAST, "java/lang/Integer");
                     generateIntegerUnwrap();
+
                     FinallyReturnPoint ret = finallys.get(node);
                     ret.tableLabel = cfw.acquireLabel();
                     cfw.add(ByteCode.GOTO, ret.tableLabel);
@@ -5511,6 +5530,7 @@ Else pass the JS object in the aReg and 0.0 in the dReg.
     private short itsZeroArgArray;
     private short itsOneArgArray;
     private short generatorStateLocal;
+    private short generatorReturnLocal;
 
     private boolean isGenerator;
     private int generatorSwitch;
