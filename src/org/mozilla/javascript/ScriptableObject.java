@@ -172,7 +172,7 @@ public abstract class ScriptableObject implements Scriptable,
         {
             in.defaultReadObject();
             if (name != null) {
-                indexOrHash = name.hashCode();
+                indexOrHash = Hashing.secureHash(name);
             }
         }
 
@@ -2952,7 +2952,7 @@ public abstract class ScriptableObject implements Scriptable,
             return null;
         }
 
-        int indexOrHash = (key != null ? key.hashCode() : index);
+        int indexOrHash = (key != null ? Hashing.secureHash(key) : index);
         if (slotsLocalRef != null) {
             Slot slot;
             int slotIndex = getSlotIndex(slotsLocalRef.length, indexOrHash);
@@ -3087,7 +3087,7 @@ public abstract class ScriptableObject implements Scriptable,
     }
 
     private synchronized void removeSlot(Object key, int index) {
-        int indexOrHash = (key != null ? key.hashCode() : index);
+        int indexOrHash = (key != null ? Hashing.secureHash(key) : index);
 
         Slot[] slotsLocalRef = slots;
         if (count != 0) {
