@@ -1,16 +1,11 @@
-function * genf0() {
-  var x = yield 1;
-  return x;
-}
-
 function * genf1() {
   //yield 1;
   try {
     //yield 2;
   } finally {
-    yield 3;
+    yield 3333;
   }
-  yield 4;
+  yield 4444;
 }
 
 var g= genf1();
