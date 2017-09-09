@@ -26,6 +26,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import org.mozilla.javascript.Hashing.EmptyHashMap;
 import org.mozilla.javascript.debug.DebuggableObject;
 import org.mozilla.javascript.annotations.JSConstructor;
 import org.mozilla.javascript.annotations.JSFunction;
@@ -117,7 +118,7 @@ public abstract class ScriptableObject implements Scriptable,
     private static final int HASH_INITIIAL_CAPACITY = 4;
     private static final float HASH_FILL_FACTOR = 0.5f;
 
-    private transient LinkedHashMap<Object, Slot> slotMap;
+    private transient Map<Object, Slot> slotMap = Hashing.emptyMap();
     // If count >= 0, it gives number of keys or if count < 0,
     // it indicates sealed object where ~count gives number of keys
     private int count;
@@ -361,7 +362,7 @@ public abstract class ScriptableObject implements Scriptable,
      */
     public boolean has(String name, Scriptable start)
     {
-        return slotMap != null && slotMap.containsKey(name);
+        return slotMap.containsKey(name);
     }
 
     /**
@@ -376,7 +377,7 @@ public abstract class ScriptableObject implements Scriptable,
         if (externalData != null) {
             return (index < externalData.getArrayLength());
         }
-        return slotMap != null && slotMap.containsKey(index);
+        return slotMap.containsKey(index);
     }
 
     /**
@@ -384,7 +385,7 @@ public abstract class ScriptableObject implements Scriptable,
      */
     public boolean has(Symbol key, Scriptable start)
     {
-        return slotMap != null && slotMap.containsKey(key);
+        return slotMap.containsKey(key);
     }
 
     /**
@@ -399,7 +400,7 @@ public abstract class ScriptableObject implements Scriptable,
      */
     public Object get(String name, Scriptable start)
     {
-        final Slot slot = slotMap == null ? null : slotMap.get(name);
+        final Slot slot = slotMap.get(name);
         if (slot == null) {
             return Scriptable.NOT_FOUND;
         }
@@ -434,7 +435,7 @@ public abstract class ScriptableObject implements Scriptable,
      */
     public Object get(Symbol key, Scriptable start)
     {
-        final Slot slot = slotMap == null ? null : slotMap.get(key);
+        final Slot slot = slotMap.get(key);
         if (slot == null) {
             return Scriptable.NOT_FOUND;
         }
@@ -2206,21 +2207,19 @@ public abstract class ScriptableObject implements Scriptable,
      * @since 1.4R3
      */
     public void sealObject() {
-        if (slotMap != null) {
-            // Make sure all LazilyLoadedCtors are initialized before sealing.
-            for (Slot slot : slotMap.values()) {
-                Object value = slot.value;
-                if (value instanceof LazilyLoadedCtor) {
-                    LazilyLoadedCtor initializer = (LazilyLoadedCtor) value;
-                    try {
-                        initializer.init();
-                    } finally {
-                        slot.value = initializer.getValue();
-                    }
+        // Make sure all LazilyLoadedCtors are initialized before sealing.
+        for (Slot slot : slotMap.values()) {
+            Object value = slot.value;
+            if (value instanceof LazilyLoadedCtor) {
+                LazilyLoadedCtor initializer = (LazilyLoadedCtor) value;
+                try {
+                    initializer.init();
+                } finally {
+                    slot.value = initializer.getValue();
                 }
             }
-            count = ~count;
         }
+        count = ~count;
     }
 
     /**
@@ -2851,33 +2850,30 @@ public abstract class ScriptableObject implements Scriptable,
      */
     private Slot getSlot(Object key, int index, int accessType)
     {
-        if (slotMap == null && accessType == SLOT_QUERY) {
-            return null;
-        }
-
         final Object name = key == null ? Integer.valueOf(index) : key;
         Slot slot = null;
 
-        if (slotMap != null) {
-            slot = slotMap.get(name);
+        slot = slotMap.get(name);
 
-            switch (accessType) {
-                case SLOT_QUERY:
+        switch (accessType) {
+            case SLOT_QUERY:
+                return slot;
+            case SLOT_MODIFY:
+            case SLOT_MODIFY_CONST:
+                if (slot != null) {
                     return slot;
-                case SLOT_MODIFY:
-                case SLOT_MODIFY_CONST:
-                    if (slot != null)
-                        return slot;
-                    break;
-                case SLOT_MODIFY_GETTER_SETTER:
-                    if (slot instanceof GetterSlot)
-                        return slot;
-                    break;
-                case SLOT_CONVERT_ACCESSOR_TO_DATA:
-                    if ( !(slot instanceof GetterSlot) )
-                        return slot;
-                    break;
-            }
+                }
+                break;
+            case SLOT_MODIFY_GETTER_SETTER:
+                if (slot instanceof GetterSlot) {
+                    return slot;
+                }
+                break;
+            case SLOT_CONVERT_ACCESSOR_TO_DATA:
+                if (!(slot instanceof GetterSlot)) {
+                    return slot;
+                }
+                break;
         }
 
         // A new slot has to be inserted or the old has to be replaced
@@ -2886,8 +2882,13 @@ public abstract class ScriptableObject implements Scriptable,
     }
 
     private void ensureHash() {
-        if (slotMap == null) {
-            slotMap = new LinkedHashMap<Object, Slot>(HASH_INITIIAL_CAPACITY, HASH_FILL_FACTOR);
+        if (slotMap.isEmpty() && (slotMap instanceof EmptyHashMap)) {
+            slotMap = new Hashing.SmallHashMap<Object, Slot>();
+        } else if ((slotMap instanceof Hashing.SmallHashMap) && (slotMap.size() == Hashing.SmallHashMap.SIZE)) {
+            LinkedHashMap<Object, Slot> newMap = new LinkedHashMap<Object, Slot>(
+                HASH_INITIIAL_CAPACITY, HASH_FILL_FACTOR);
+            newMap.putAll(slotMap);
+            slotMap = newMap;
         }
     }
 
@@ -2935,21 +2936,20 @@ public abstract class ScriptableObject implements Scriptable,
     private void removeSlot(Object key, int index) {
         final Object name = key == null ? Integer.valueOf(index) : key;
 
-        if (slotMap != null) {
-            final Slot slot = slotMap.get(name);
+        final Slot slot = slotMap.get(name);
 
-            if (slot != null) {
-                // non-configurable
-                if ((slot.getAttributes() & PERMANENT) != 0) {
-                    Context cx = Context.getContext();
-                    if (cx.isStrictMode()) {
-                        throw ScriptRuntime.typeError1("msg.delete.property.with.configurable.false", name);
-                    }
-                    return;
+        if (slot != null) {
+            // non-configurable
+            if ((slot.getAttributes() & PERMANENT) != 0) {
+                Context cx = Context.getContext();
+                if (cx.isStrictMode()) {
+                    throw ScriptRuntime
+                        .typeError1("msg.delete.property.with.configurable.false", name);
                 }
-                count--;
-                slotMap.remove(name);
+                return;
             }
+            count--;
+            slotMap.remove(name);
         }
     }
 
@@ -2964,9 +2964,6 @@ public abstract class ScriptableObject implements Scriptable,
             for (int i = 0; i < externalLen; i++) {
                 a[i] = Integer.valueOf(i);
             }
-        }
-        if (slotMap == null) {
-            return a;
         }
 
         int c = externalLen;
