@@ -151,7 +151,6 @@ public abstract class ScriptableObject implements Scriptable,
         Object name; // This can change due to caching
         int indexOrHash;
         private volatile short attributes;
-        transient volatile boolean wasDeleted;
         volatile Object value;
         transient Slot next; // next in hash table bucket
         transient volatile Slot orderedNext; // next in linked list
@@ -201,12 +200,6 @@ public abstract class ScriptableObject implements Scriptable,
         {
             checkValidAttributes(value);
             attributes = (short)value;
-        }
-
-        void markDeleted() {
-            wasDeleted = true;
-            value = null;
-            name = null;
         }
 
         ScriptableObject getPropertyDescriptor(Context cx, Scriptable scope) {
@@ -337,13 +330,6 @@ public abstract class ScriptableObject implements Scriptable,
             }
             return val;
         }
-
-        @Override
-        void markDeleted() {
-            super.markDeleted();
-            getter = null;
-            setter = null;
-        }
     }
 
     /**
@@ -386,12 +372,6 @@ public abstract class ScriptableObject implements Scriptable,
         @Override
         void setAttributes(int value) {
             slot.setAttributes(value);
-        }
-
-        @Override
-        void markDeleted() {
-            super.markDeleted();
-            slot.markDeleted();
         }
 
         private void writeObject(ObjectOutputStream out) throws IOException {
@@ -2970,8 +2950,7 @@ public abstract class ScriptableObject implements Scriptable,
         final long stamp = slotMap.readLock();
         try {
             for (Slot slot : slotMap) {
-                if (!slot.wasDeleted &&
-                    (getNonEnumerable || (slot.getAttributes() & DONTENUM) == 0) &&
+                if ((getNonEnumerable || (slot.getAttributes() & DONTENUM) == 0) &&
                     (getSymbols || !(slot.name instanceof Symbol))) {
                     if (c == externalLen) {
                         // Special handling to combine external array with additional properties
@@ -3019,9 +2998,7 @@ public abstract class ScriptableObject implements Scriptable,
             } else {
                 out.writeInt(objectsCount);
                 for (Slot slot : slotMap) {
-                    if (!slot.wasDeleted) {
-                        out.writeObject(slot);
-                    }
+                    out.writeObject(slot);
                 }
             }
         } finally {

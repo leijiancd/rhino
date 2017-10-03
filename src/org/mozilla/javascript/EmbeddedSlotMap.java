@@ -214,8 +214,6 @@ public class EmbeddedSlotMap
                 } else {
                     prev.next = newSlot;
                 }
-                // other housekeeping
-                slot.markDeleted();
                 return newSlot;
             }
         }
@@ -315,9 +313,6 @@ public class EmbeddedSlotMap
                 if (deleted == lastAdded) {
                     lastAdded = prev;
                 }
-
-                // Mark the slot as removed.
-                slot.markDeleted();
             }
         }
     }

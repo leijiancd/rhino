@@ -87,7 +87,6 @@ public class HashSlotMap
                 return inner;
             }
             newSlot.value = inner.value;
-            slot.markDeleted();
             map.put(name, newSlot);
             return newSlot;
         }
@@ -121,7 +120,6 @@ public class HashSlotMap
                 }
                 return;
             }
-            slot.markDeleted();
             map.remove(name);
         }
     }
